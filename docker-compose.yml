@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: inventiq
+
+  # Redis for Sessions and Caching
+  redis:
+    image: redis:alpine
+    container_name: ims-redis
+    restart: always
+    ports:
+      - "6379:6379"

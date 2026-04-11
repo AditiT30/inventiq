@@ -1,0 +1,6 @@
+/*
+create product
+update product
+list products
+delete products
+*/

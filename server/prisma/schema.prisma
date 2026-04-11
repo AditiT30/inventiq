@@ -1,0 +1,88 @@
+//define how Prisma connects to database & how it generates the code
+generator client {
+  provider = "prisma-client-js" //Standard provider for Node.js
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//To define what is available for sale
+model Product {
+  product_code String @id
+  name String
+  description String?
+  weight       Float
+  price        Float    // Formatted as ₹ in UI
+  quantity     Int
+  last_updated DateTime @updatedAt //mapped to TIMESTAMP in PostgreSQL
+  //@updatedAt - Prisma attribute,tells the Prisma Client to automatically update this field with the current timestamp whenever a record is modified
+}
+
+//To record a financial transaction
+model Order {
+  order_id     String   @id @default(uuid()) //Prisma will automatically generate a Universally Unique Identifier whenever a new order is created
+  type         String   // "sale" or "purchase"
+  products     Json     // Array of product snapshots
+  status       String   // "Quotation", "Dispatched"
+  date         DateTime @default(now()) //Prisma will automatically set this to the current date and time. Unlike @updatedAt, this value stays the same once it is set.
+  notes        String? //extra instructions or descriptions
+  // Foreign Keys
+  customer_id   String?
+  supplier_id   String?
+  // Relation Fields allow Prisma to "join" the tables when data fetched
+  customer      Customer? @relation(fields: [customer_id], references: [customer_id])
+  supplier      Supplier? @relation(fields: [supplier_id], references: [supplier_id])
+}
+
+// Customer Entity
+model Customer {
+  customer_id String   @id
+  name        String
+  contact     String
+  address     String
+  orders      Order[]  // Relation for querying sale history
+}
+
+// Manufacturing (WIP) Entity
+//Manufacturing-to-Product link differently than the Customer-to-Order
+//AS each order belongs to exactly 1 customer but a single mfg. batch involves multiple raw materials and multiple output products
+//wipService must handle the linking logic
+model Manufacturing {
+  batch_number  String   @id
+  raw_materials Json     // Snapshot of materials used
+  output        Json     // Snapshot of products produced
+  status        String   // e.g., "WIP", "Completed"
+  start_date    DateTime @default(now())
+  end_date      DateTime?
+}
+
+//Supplier entity
+model Supplier {
+  supplier_id String   @id
+  name        String
+  contact     String
+  address     String
+  // Back-relation: A supplier can be associated with many purchase orders
+  orders      Order[]
+}
+
+//Logs for Audit & Consistency
+model InventoryLog {
+  id           Int      @id @default(autoincrement())
+  product_code String
+  change_type  String   // "ADD" or "DEDUCT"
+  change       Int
+  quantity     Int
+  reason       String   // e.g., "Sale Order #123"
+  timestamp    DateTime @default(now())
+}
+
+
+model ActivityLog {
+  id          String   @id @default(uuid())
+  action      String
+  entity      String
+  entity_id   String
+  created_at  DateTime @default(now())
+}

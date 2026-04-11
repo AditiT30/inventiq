@@ -1,0 +1,5 @@
+/*
+create customer
+view customers
+maybe link to orders
+*/
