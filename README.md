@@ -89,7 +89,7 @@ The application has been deployed on a DigitalOcean server and can be accessed t
 
 Open the application in a browser using:
 
-- [http://64.227.174.230:8080](http://64.227.174.230:8080)
+- [64.227.174.230](64.227.174.230)
 
 ## Login Credentials
 
