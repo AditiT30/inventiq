@@ -1,5 +1,5 @@
-//BASE SETUP
-const API_BASE_URL = "http://localhost:5001/api";
+// Use a deploy-time API URL in cloud environments, but keep localhost as the dev fallback.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5001/api";
 const AUTH_TOKEN_KEY = "inventiq_auth_token";
 const AUTH_REDIRECT_EVENT = "inventiq:auth-expired";
 
