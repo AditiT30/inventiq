@@ -14,7 +14,7 @@ type StartBatchInput = {
 
 //startBatch & completeBatch
 
-export const startBatch = async(data: StartBatchInput): Promise<void> => {
+export const startBatch = async (data: StartBatchInput) => {
     return prisma.$transaction(
         async (tx) => {
             await deductStock(data.raw_materials,`Manufacturing Batch ${data.batch_number} started`,tx);

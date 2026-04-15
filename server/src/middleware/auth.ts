@@ -3,15 +3,54 @@
 
 import {type Request, type Response, type NextFunction, Router} from 'express';
 import jwt from 'jsonwebtoken';
+import { isSessionActive, refreshSession } from '../lib/sessionStore.js';
 
-export const authMiddleware = (req: Request, res: Response, next: NextFunction)=>{
-    const token = req.headers.authorization?.split(' ')[1];
+type AuthPayload = jwt.JwtPayload & {
+    user?: string;
+    session_id?: string;
+};
+
+export const extractAuthToken = (req: Request, allowQueryToken = false) => {
+    // Reuse the same token parsing for normal API requests and SSE stream requests.
+    const headerToken = req.headers.authorization?.split(' ')[1];
+
+    if (headerToken) {
+        return headerToken;
+    }
+
+    if (allowQueryToken && typeof req.query.token === "string" && req.query.token.length > 0) {
+        return req.query.token;
+    }
+
+    return undefined;
+};
+
+export const verifyAuthToken = (token: string) => jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
+
+export const validateAuthenticatedToken = async (token: string) => {
+    const payload = verifyAuthToken(token);
+
+    if (!payload.session_id) {
+        throw new Error('Session is missing');
+    }
+
+    const active = await isSessionActive(payload.session_id);
+    if (!active) {
+        throw new Error('Session is inactive');
+    }
+
+    await refreshSession(payload.session_id);
+    return payload;
+};
+
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction)=>{
+    const token = extractAuthToken(req);
     if (!token) {
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
     try {
         //jwt.verify(token, secretOrPublicKey, [options, callback])
-        const payload = jwt.verify(token, process.env.JWT_SECRET!);
+        const payload = await validateAuthenticatedToken(token);
         (req as any).user = payload; //token's data attached to the req object
         next(); //tells Express that the user is authenticated and it's safe to move to the actual route handler
     }

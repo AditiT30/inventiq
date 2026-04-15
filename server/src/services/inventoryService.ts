@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../lib/db.js";
 import { AppError } from "../errors/AppError.js"; //Custom error class , to send proper HTTP errors
 
@@ -6,8 +8,10 @@ type StockItem = { //Defines shape of input & Prevents invalid data
     quantity: number
 }
 
+type PrismaExecutor = Prisma.TransactionClient | typeof prisma;
+
 //DEDUCT STOCK
-export const deductStock = async (items: StockItem[], reason: string, tx = prisma) => {
+export const deductStock = async (items: StockItem[], reason: string, tx: PrismaExecutor = prisma) => {
 
     //tx=prisma , tx is prisma instance , lets one function work in both modes  - normal queries & transactional mode
 
@@ -61,7 +65,7 @@ export const deductStock = async (items: StockItem[], reason: string, tx = prism
 }
 
 // ADD STOCK
-export const addStock = async (items: StockItem[], reason: string, tx = prisma) => {
+export const addStock = async (items: StockItem[], reason: string, tx: PrismaExecutor = prisma) => {
     //Validate reason
     if (!reason) {
         throw new AppError("Reason is required for adding stock", 400)
@@ -102,5 +106,3 @@ export const addStock = async (items: StockItem[], reason: string, tx = prisma) 
         })
     }
 }
-
-

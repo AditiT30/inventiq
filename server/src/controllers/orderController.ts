@@ -4,12 +4,79 @@ update status
 fetch order history
 */
 import type { Request, Response, NextFunction } from "express";
+import { AppError } from "../errors/AppError.js";
+import { publishLiveEvent } from "../lib/liveEvents.js";
 import { createOrder, updateStatus } from "../services/orderService.js";
 import { prisma } from "../lib/db.js";
+import { z } from "zod";
+
+const salesStatuses = ["Quotation", "Packing", "Dispatch", "History"] as const;
+const purchaseStatuses = ["Quotations Received", "Unpaid", "Paid", "Order Completion", "History"] as const;
+
+const getSingleParam = (value: string | string[] | undefined, name: string) => {
+    if (typeof value !== "string" || value.length === 0) {
+        throw new AppError(`${name} is required`, 400);
+    }
+
+    return value;
+};
+
+const orderLineSchema = z.object({
+    product_code: z.string().min(1, "product_code is required"),
+    quantity: z.number().int().positive("quantity must be greater than 0"),
+    unit_price: z.number().min(0, "unit_price must be non-negative").optional(),
+});
+
+const createOrderSchema = z.object({
+    type: z.enum(["sale", "purchase"]),
+    products: z.array(orderLineSchema).min(1, "products must contain at least one line"),
+    status: z.string().min(1).optional(),
+    notes: z.string().nullable().optional(),
+    customer_id: z.string().min(1).nullable().optional(),
+    supplier_id: z.string().min(1).nullable().optional(),
+}).superRefine((value, ctx) => {
+    if (value.type === "sale" && !value.customer_id) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "customer_id is required for sale orders", path: ["customer_id"] });
+    }
+
+    if (value.type === "purchase" && !value.supplier_id) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "supplier_id is required for purchase orders", path: ["supplier_id"] });
+    }
+
+    if (value.status) {
+        const validStatuses = value.type === "sale" ? salesStatuses : purchaseStatuses;
+        if (!validStatuses.includes(value.status as never)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: `invalid status for ${value.type} order`, path: ["status"] });
+        }
+    }
+});
+
+const updateOrderSchema = z.object({
+    type: z.enum(["sale", "purchase"]).optional(),
+    products: z.array(orderLineSchema).min(1).optional(),
+    status: z.string().min(1).optional(),
+    notes: z.string().nullable().optional(),
+    customer_id: z.string().min(1).nullable().optional(),
+    supplier_id: z.string().min(1).nullable().optional(),
+}).refine((value) => Object.keys(value).length > 0, {
+    message: "At least one field must be provided for update",
+});
+
+const updateStatusSchema = z.object({
+    status: z.string().min(1, "status is required"),
+});
 
 export const createOrderHandler = async (req: Request, res: Response, next: NextFunction) => {
     try{
-        const order = await createOrder(req.body);
+        const payload = createOrderSchema.parse(req.body);
+        const order = await createOrder(payload);
+        // Orders affect the order views directly and also feed dashboard/history summaries.
+        publishLiveEvent({
+            action: "created",
+            entity: "order",
+            channels: ["orders", "dashboard", "history"],
+            id: order.order_id,
+        });
         res.status(201).json(order);
     }
     catch(error){
@@ -19,22 +86,33 @@ export const createOrderHandler = async (req: Request, res: Response, next: Next
 
 export const updateOrderStatusHandler = async (req: Request, res: Response, next: NextFunction) => {
     try{
-        const {order_id}= req.params;
-        const {status} = req.body;
-        if (typeof order_id === "string") {
-            const updatedOrder = await updateStatus(order_id, status);
-            res.json(updatedOrder);
-        }
-        res.status(404).json( {error:`check data type for ${order_id}`});
+        const order_id = getSingleParam(req.params.order_id, "order_id");
+        const { status } = updateStatusSchema.parse(req.body);
+        const updatedOrder = await updateStatus(order_id, status);
+        // Status transitions can change stock, history, and dashboard metrics in one move.
+        publishLiveEvent({
+            action: "status-updated",
+            entity: "order",
+            channels: ["orders", "products", "dashboard", "history"],
+            id: updatedOrder.order_id,
+        });
+        res.json(updatedOrder);
     }
     catch(error){
         next(error);
     }
-}
+};
 
 export const getAllOrdersHandler = async (req: Request, res: Response, next: NextFunction) => {
     try {
+        const type = typeof req.query.type === "string" ? req.query.type.toLowerCase() : undefined;
+
+        if (type && !["sale", "purchase"].includes(type)) {
+            throw new AppError("type query must be either 'sale' or 'purchase'", 400);
+        }
+
         const orders = await prisma.order.findMany({
+            ...(type ? { where: { type } } : {}),
             include: {
                 customer: true,
                 supplier: true
@@ -52,18 +130,17 @@ export const getAllOrdersHandler = async (req: Request, res: Response, next: Nex
 
 export const getOrderByIdHandler = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { order_id } = req.params;
-        let order;
-        if(typeof order_id==="string"){
-
-        order = await prisma.order.findUnique({
+        const order_id = req.params.order_id;
+        if (typeof order_id !== "string" || order_id.length === 0) {
+            throw new AppError("order_id is required", 400);
+        }
+        const order = await prisma.order.findUnique({
             where: { order_id },
             include: {
                 customer: true,
                 supplier: true
             }
         });
-        }
 
         if (!order) {
             res.status(404).json({ error: "Order not found" });
@@ -76,3 +153,77 @@ export const getOrderByIdHandler = async (req: Request, res: Response, next: Nex
     }
 };
 
+export const updateOrderHandler = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const order_id = getSingleParam(req.params.order_id, "order_id");
+        const { products, status, notes, customer_id, supplier_id } = updateOrderSchema.parse(req.body);
+
+        const existingOrder = await prisma.order.findUnique({
+            where: { order_id },
+        });
+
+        if (!existingOrder) {
+            throw new AppError("Order not found", 404);
+        }
+
+        const validStatuses = existingOrder.type === "sale" ? salesStatuses : purchaseStatuses;
+        if (status !== undefined && !validStatuses.includes(status as never)) {
+            throw new AppError(`Invalid status for ${existingOrder.type} order`, 400);
+        }
+
+        const updatedOrder = await prisma.order.update({
+            where: { order_id },
+            data: {
+                ...(products !== undefined ? { products } : {}),
+                ...(status !== undefined ? { status } : {}),
+                ...(notes !== undefined ? { notes } : {}),
+                ...(customer_id !== undefined ? { customer_id } : {}),
+                ...(supplier_id !== undefined ? { supplier_id } : {}),
+            },
+            include: {
+                customer: true,
+                supplier: true,
+            }
+        });
+
+        // Plain order edits still need to refresh downstream operational views.
+        publishLiveEvent({
+            action: "updated",
+            entity: "order",
+            channels: ["orders", "dashboard", "history"],
+            id: updatedOrder.order_id,
+        });
+        res.json(updatedOrder);
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const deleteOrderHandler = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const order_id = getSingleParam(req.params.order_id, "order_id");
+
+        const existingOrder = await prisma.order.findUnique({
+            where: { order_id },
+        });
+
+        if (!existingOrder) {
+            throw new AppError("Order not found", 404);
+        }
+
+        await prisma.order.delete({
+            where: { order_id },
+        });
+
+        // Broadcast after the delete succeeds so clients can safely refetch.
+        publishLiveEvent({
+            action: "deleted",
+            entity: "order",
+            channels: ["orders", "dashboard", "history"],
+            id: order_id,
+        });
+        res.json({ message: "Order deleted successfully" });
+    } catch (error) {
+        next(error);
+    }
+};

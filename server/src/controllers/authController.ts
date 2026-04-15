@@ -8,6 +8,10 @@ token handling
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import { AppError } from '../errors/AppError.js';
+import { createSession, releaseSession } from '../lib/sessionStore.js';
+
+const sessionExpiry = '8h';
 
 export const login = async (req: Request, res: Response) => {
     const { username, password } = req.body;
@@ -16,16 +20,31 @@ export const login = async (req: Request, res: Response) => {
     const isPassValid = await bcrypt.compare(password, process.env.APP_PASS_HASH || ''); //takes the plain password and mathematically checks it against the hash , an async operation
 
     if (isUserValid && isPassValid) {
+        const sessionId = await createSession();
+
+        if (!sessionId) {
+            throw new AppError('Maximum of 5 concurrent users already reached', 429);
+        }
 
         //jwt.sign(payload, secretOrPrivateKey, [options, callback])
 
         const token = jwt.sign(
-            { user: username }, // Payload: Data to store in the token
+            { user: username, session_id: sessionId }, // Payload: Data to store in the token
             process.env.JWT_SECRET!,
-            { expiresIn: '8h' }
+            { expiresIn: sessionExpiry }
         );
         return res.json({ token });
-    }jwt
+    }
 
     res.status(401).json({ error: 'Invalid credentials' });
+};
+
+export const logout = async (req: Request, res: Response) => {
+    const payload = (req as Request & { user?: { session_id?: string } }).user;
+
+    if (payload?.session_id) {
+        await releaseSession(payload.session_id);
+    }
+
+    res.json({ message: 'Logged out successfully' });
 };

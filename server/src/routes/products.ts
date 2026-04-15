@@ -1,15 +1,17 @@
 import { Router } from 'express';
-import { prisma } from '../lib/db.js';
+import {
+    createProductHandler,
+    deleteProductHandler,
+    getAllProductsHandler,
+    getProductByCodeHandler,
+    updateProductHandler
+} from "../controllers/productController.js";
 const router = Router();
 
-// GET all products
-router.get('/', async (req, res, next) => {
-    try {
-        const products = await prisma.product.findMany();
-        res.json(products);
-    } catch (error) {
-        next(error);
-    }
-});
+router.get('/', getAllProductsHandler);
+router.get('/:product_code', getProductByCodeHandler);
+router.post('/', createProductHandler);
+router.patch('/:product_code', updateProductHandler);
+router.delete('/:product_code', deleteProductHandler);
 
 export default router;
